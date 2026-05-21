@@ -1,0 +1,17 @@
+name: pb-occ-alignn-full-tc
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - pytorch
+  - numpy
+  - pandas
+  - scikit-learn
+  - pymatgen
+  - pyyaml
+  - tqdm
+  - matplotlib
+  - pytest
+  - pip
+

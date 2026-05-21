@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+runs/
+data/real/
+*.zip
+*.pt
+*.pth
+*.ckpt

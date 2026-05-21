@@ -1,0 +1,7 @@
+sample_id,cif_path,Tc_K,pressure_GPa,magnetic_field_T,field_direction,structure_source,match_type,fidelity,parent_cif_id,chemical_system,family,split
+toy_full_train,cifs/toy_full.cif,39.0,0.0,0.0,zero,toy,formula_exact,exact,toy_full,B-Mg,toy,train
+toy_partial_train,cifs/toy_partial.cif,4.2,unknown,unknown,unknown,toy,formula_similarity,synthetic_doped,toy_partial,Ag-Sn-Te,toy,train
+toy_vacancy_train,cifs/toy_vacancy.cif,12.0,1.5,3.0,powder,toy,formula_exact,synthetic_doped,toy_vacancy,Cu-O,toy,train
+toy_full_val,cifs/toy_full.cif,36.5,2.0,0.0,zero,toy,formula_exact,exact,toy_full_val,B-Mg,toy,val
+toy_partial_test,cifs/toy_partial.cif,5.0,unknown,1.0,parallel_c,toy,formula_similarity,synthetic_doped,toy_partial_test,Ag-Sn-Te,toy,test
+toy_vacancy_test,cifs/toy_vacancy.cif,10.0,0.0,unknown,unknown,toy,formula_exact,synthetic_doped,toy_vacancy_test,Cu-O,toy,test
