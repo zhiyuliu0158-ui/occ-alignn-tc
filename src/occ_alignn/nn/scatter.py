@@ -27,8 +27,12 @@ def scatter_max(src: torch.Tensor, index: torch.Tensor, dim_size: int) -> torch.
     """Max rows of src into dim_size buckets."""
     if src.numel() == 0:
         return src.new_zeros((dim_size, src.shape[-1]))
-    out = src.new_full((dim_size, src.shape[-1]), -torch.inf)
-    for row, bucket in zip(src, index):
-        out[int(bucket)] = torch.maximum(out[int(bucket)], row)
-    return torch.where(torch.isfinite(out), out, torch.zeros_like(out))
+    pooled = []
+    for bucket in range(dim_size):
+        values = src[index == bucket]
+        if values.numel() == 0:
+            pooled.append(src.new_zeros((src.shape[-1],)))
+        else:
+            pooled.append(values.max(dim=0).values)
+    return torch.stack(pooled, dim=0)
 

@@ -25,6 +25,12 @@ class GraphBatch:
     angle: torch.FloatTensor
     angle_rbf: torch.FloatTensor
     angle_triplet_index: torch.LongTensor
+    structure_features: torch.FloatTensor
+    formula_features: torch.FloatTensor
+    formula_mismatch_features: torch.FloatTensor
+    confidence_features: torch.FloatTensor
+    approx_features: torch.FloatTensor
+    node_approx_features: torch.FloatTensor
     batch: torch.LongTensor
     edge_batch: torch.LongTensor
     angle_batch: torch.LongTensor
@@ -36,6 +42,7 @@ class GraphBatch:
     fidelity_id: torch.LongTensor
     target: torch.FloatTensor
     tc_k: torch.FloatTensor
+    sample_weight: torch.FloatTensor
     sample_ids: list[str]
     cif_paths: list[str]
     formulas: list[str]
@@ -91,6 +98,12 @@ def collate_graphs(items: Iterable[GraphData]) -> GraphBatch:
     angle: list[torch.Tensor] = []
     angle_rbf: list[torch.Tensor] = []
     angle_triplets: list[torch.Tensor] = []
+    structure_features: list[torch.Tensor] = []
+    formula_features: list[torch.Tensor] = []
+    formula_mismatch_features: list[torch.Tensor] = []
+    confidence_features: list[torch.Tensor] = []
+    approx_features: list[torch.Tensor] = []
+    node_approx: list[torch.Tensor] = []
     graph_batch: list[torch.Tensor] = []
     edge_batch: list[torch.Tensor] = []
     angle_batch: list[torch.Tensor] = []
@@ -103,6 +116,7 @@ def collate_graphs(items: Iterable[GraphData]) -> GraphBatch:
     fidelity_ids: list[int] = []
     targets: list[float] = []
     tc_values: list[float] = []
+    sample_weights: list[float] = []
     sample_ids: list[str] = []
     cif_paths: list[str] = []
     formulas: list[str] = []
@@ -126,6 +140,12 @@ def collate_graphs(items: Iterable[GraphData]) -> GraphBatch:
             angle_rbf.append(graph.angle_rbf)
             angle_triplets.append(graph.angle_triplet_index + node_offset)
             angle_batch.append(torch.full((graph.num_angles,), graph_id, dtype=torch.long))
+        structure_features.append(graph.structure_features)
+        formula_features.append(graph.formula_features)
+        formula_mismatch_features.append(graph.formula_mismatch_features)
+        confidence_features.append(graph.confidence_features)
+        approx_features.append(graph.approx_features)
+        node_approx.append(graph.node_approx_features)
         graph_batch.append(torch.full((graph.num_nodes,), graph_id, dtype=torch.long))
         pressures.append(graph.pressure if graph.pressure is not None else torch.zeros(3))
         fields.append(graph.field if graph.field is not None else torch.zeros(3))
@@ -135,6 +155,7 @@ def collate_graphs(items: Iterable[GraphData]) -> GraphBatch:
         fidelity_ids.append(int(graph.fidelity_id))
         targets.append(float("nan") if graph.target is None else float(graph.target))
         tc_values.append(float("nan") if graph.tc_k is None else float(graph.tc_k))
+        sample_weights.append(float(graph.sample_weight))
         sample_ids.append(graph.sample_id)
         cif_paths.append(graph.cif_path)
         formulas.append(graph.formula)
@@ -156,6 +177,12 @@ def collate_graphs(items: Iterable[GraphData]) -> GraphBatch:
         angle=_cat_or_empty(angle, (0,), torch.float32),
         angle_rbf=_cat_or_empty(angle_rbf, (0, angle_rbf_dim), torch.float32),
         angle_triplet_index=_cat_index_or_empty(angle_triplets, (3, 0)),
+        structure_features=torch.stack(structure_features).float(),
+        formula_features=torch.stack(formula_features).float(),
+        formula_mismatch_features=torch.stack(formula_mismatch_features).float(),
+        confidence_features=torch.stack(confidence_features).float(),
+        approx_features=torch.stack(approx_features).float(),
+        node_approx_features=torch.cat(node_approx, dim=0).float(),
         batch=torch.cat(graph_batch, dim=0),
         edge_batch=_cat_or_empty(edge_batch, (0,), torch.long),
         angle_batch=_cat_or_empty(angle_batch, (0,), torch.long),
@@ -167,6 +194,7 @@ def collate_graphs(items: Iterable[GraphData]) -> GraphBatch:
         fidelity_id=torch.as_tensor(fidelity_ids, dtype=torch.long),
         target=torch.as_tensor(targets, dtype=torch.float32),
         tc_k=torch.as_tensor(tc_values, dtype=torch.float32),
+        sample_weight=torch.as_tensor(sample_weights, dtype=torch.float32),
         sample_ids=sample_ids,
         cif_paths=cif_paths,
         formulas=formulas,

@@ -29,11 +29,13 @@ class Trainer:
         config: dict[str, Any],
         output_dir: str | Path,
         device: torch.device | str,
+        is_main_process: bool = True,
     ) -> None:
         self.model = model.to(device)
         self.config = config
         self.output_dir = ensure_dir(output_dir)
         self.device = torch.device(device)
+        self.is_main_process = is_main_process
         training_cfg = config.get("training", {})
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -58,6 +60,9 @@ class Trainer:
                 patience=10,
             )
         self.loss_name = str(training_cfg.get("regression_loss", "gaussian_nll"))
+        self.raw_tc_loss_weight = float(training_cfg.get("raw_tc_loss_weight", 0.15))
+        self.raw_tc_loss_scale = float(training_cfg.get("raw_tc_loss_scale", 50.0))
+        self.use_sample_weight = bool(training_cfg.get("use_sample_weight", False))
         self.grad_clip = float(training_cfg.get("grad_clip", 1.0))
         self.start_epoch = 0
         self.best_metric = float("inf")
@@ -66,7 +71,7 @@ class Trainer:
         """Resume model and optimizer state."""
         checkpoint = load_checkpoint(
             checkpoint_path,
-            model=self.model,
+            model=self._checkpoint_model(),
             optimizer=self.optimizer,
             map_location=self.device,
         )
@@ -76,13 +81,20 @@ class Trainer:
     def _run_train_epoch(self, loader: DataLoader, epoch: int) -> float:
         self.model.train()
         losses: list[float] = []
-        progress = tqdm(loader, desc=f"epoch {epoch} train", leave=False)
+        progress = tqdm(loader, desc=f"epoch {epoch} train", leave=False, disable=not self.is_main_process)
         for batch in progress:
             assert isinstance(batch, GraphBatch)
             batch = batch.to(self.device)
             self.optimizer.zero_grad(set_to_none=True)
             outputs = self.model(batch)
-            loss = regression_loss(outputs, batch.target, self.loss_name)
+            loss = regression_loss(
+                outputs,
+                batch.target,
+                self.loss_name,
+                weight=batch.sample_weight if self.use_sample_weight else None,
+                raw_weight=self.raw_tc_loss_weight,
+                raw_scale=self.raw_tc_loss_scale,
+            )
             loss.backward()
             if self.grad_clip > 0:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
@@ -95,11 +107,24 @@ class Trainer:
     def _run_eval_loss(self, loader: DataLoader) -> float:
         self.model.eval()
         losses: list[float] = []
-        for batch in tqdm(loader, desc="validation", leave=False):
+        for batch in tqdm(loader, desc="validation", leave=False, disable=not self.is_main_process):
             assert isinstance(batch, GraphBatch)
             batch = batch.to(self.device)
             outputs = self.model(batch)
-            losses.append(float(regression_loss(outputs, batch.target, self.loss_name).detach().cpu()))
+            losses.append(
+                float(
+                    regression_loss(
+                        outputs,
+                        batch.target,
+                        self.loss_name,
+                        weight=batch.sample_weight if self.use_sample_weight else None,
+                        raw_weight=self.raw_tc_loss_weight,
+                        raw_scale=self.raw_tc_loss_scale,
+                    )
+                    .detach()
+                    .cpu()
+                )
+            )
         return float(sum(losses) / max(1, len(losses)))
 
     def fit(
@@ -112,13 +137,17 @@ class Trainer:
         """Train the model and write all training artifacts."""
         if resume_path is not None:
             self.resume(resume_path)
-        save_config(self.config, self.output_dir / "config.yaml")
+        if self.is_main_process:
+            save_config(self.config, self.output_dir / "config.yaml")
         training_cfg = self.config.get("training", {})
         epochs = int(training_cfg.get("epochs", 200))
         patience = int(training_cfg.get("early_stopping_patience", 30))
         history: list[dict[str, float]] = []
         stale_epochs = 0
         for epoch in range(self.start_epoch, epochs):
+            sampler = getattr(train_loader, "sampler", None)
+            if hasattr(sampler, "set_epoch"):
+                sampler.set_epoch(epoch)
             train_loss = self._run_train_epoch(train_loader, epoch)
             val_loss = self._run_eval_loss(val_loader)
             if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -126,37 +155,48 @@ class Trainer:
             elif self.scheduler is not None:
                 self.scheduler.step()
             history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-            LOGGER.info("epoch=%d train_loss=%.5f val_loss=%.5f", epoch, train_loss, val_loss)
-            save_checkpoint(
-                self.output_dir / "last.pt",
-                self.model,
-                self.optimizer,
-                self.config,
-                epoch,
-                self.best_metric,
-            )
+            if self.is_main_process:
+                LOGGER.info("epoch=%d train_loss=%.5f val_loss=%.5f", epoch, train_loss, val_loss)
             if val_loss < self.best_metric:
                 self.best_metric = val_loss
                 stale_epochs = 0
+                if self.is_main_process:
+                    save_checkpoint(
+                        self.output_dir / "best.pt",
+                        self._checkpoint_model(),
+                        self.optimizer,
+                        self.config,
+                        epoch,
+                        self.best_metric,
+                    )
+            else:
+                stale_epochs += 1
+            if self.is_main_process:
                 save_checkpoint(
-                    self.output_dir / "best.pt",
-                    self.model,
+                    self.output_dir / "last.pt",
+                    self._checkpoint_model(),
                     self.optimizer,
                     self.config,
                     epoch,
                     self.best_metric,
                 )
-            else:
-                stale_epochs += 1
-                if stale_epochs >= patience:
+            if stale_epochs >= patience:
+                if self.is_main_process:
                     LOGGER.info("early stopping at epoch %d", epoch)
-                    break
+                break
+
+        if not self.is_main_process:
+            return {}
 
         write_json({"history": history, "best_val_loss": self.best_metric}, self.output_dir / "metrics.json")
-        load_checkpoint(self.output_dir / "best.pt", model=self.model, map_location=self.device)
-        val_frame = predict_loader(self.model, val_loader, self.device)
+        eval_model = self._checkpoint_model()
+        load_checkpoint(self.output_dir / "best.pt", model=eval_model, map_location=self.device)
+        val_frame = predict_loader(eval_model, val_loader, self.device)
         val_metrics = save_evaluation_outputs(val_frame, self.output_dir, prefix="val")
         if test_loader is not None:
-            test_frame = predict_loader(self.model, test_loader, self.device)
+            test_frame = predict_loader(eval_model, test_loader, self.device)
             save_evaluation_outputs(test_frame, self.output_dir, prefix="test")
         return val_metrics
+
+    def _checkpoint_model(self) -> torch.nn.Module:
+        return self.model.module if hasattr(self.model, "module") else self.model

@@ -13,6 +13,14 @@ import torch
 from pymatgen.core import Structure
 from pymatgen.core.periodic_table import Element
 
+from occ_alignn.featurizers.elements import NUM_ELEMENT_TOKENS, species_to_token
+from occ_alignn.featurizers.formula import (
+    APPROX_FEATURE_DIM,
+    NODE_APPROX_FEATURE_DIM,
+    formula_cif_mismatch,
+    formula_descriptor,
+    parse_formula_counts,
+)
 from occ_alignn.featurizers.occupancy import (
     distribution_to_tensors,
     normalize_site_distribution,
@@ -36,6 +44,12 @@ class GraphData:
     angle: torch.FloatTensor
     angle_rbf: torch.FloatTensor
     angle_triplet_index: torch.LongTensor
+    structure_features: torch.FloatTensor
+    formula_features: torch.FloatTensor
+    formula_mismatch_features: torch.FloatTensor
+    confidence_features: torch.FloatTensor
+    approx_features: torch.FloatTensor
+    node_approx_features: torch.FloatTensor
     pressure: torch.FloatTensor | None = None
     field: torch.FloatTensor | None = None
     field_direction_id: int = 6
@@ -43,10 +57,12 @@ class GraphData:
     match_type_id: int = 0
     fidelity_id: int = 0
     target: float | None = None
+    sample_weight: float = 1.0
     tc_k: float | None = None
     sample_id: str = ""
     cif_path: str = ""
     formula: str = ""
+    original_formula: str = ""
     metadata: dict[str, Any] | None = None
 
     @property
@@ -144,13 +160,150 @@ def parse_cif_sites(
         normalize_site_distribution(dist, max_species_per_site)
         for dist in merged_distributions
     ]
-    formula_parts: list[str] = []
-    for dist in normalized:
-        formula_parts.extend(
-            f"{symbol}{occupancy:.3g}" for symbol, occupancy in dist.items()
-        )
-    formula = " ".join(formula_parts)
+    formula = _formula_from_distributions(normalized)
     return structure, np.asarray(merged_coords, dtype=np.float64), normalized, formula
+
+
+def _formula_from_distributions(distributions: list[dict[str, float]]) -> str:
+    totals = _counts_from_distributions(distributions)
+    return " ".join(f"{symbol}{amount:.6g}" for symbol, amount in sorted(totals.items()))
+
+
+def _counts_from_distributions(distributions: list[dict[str, float]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for distribution in distributions:
+        for symbol, occupancy in distribution.items():
+            if symbol == "Vacancy":
+                continue
+            totals[symbol] = totals.get(symbol, 0.0) + float(occupancy)
+    return totals
+
+
+@dataclass
+class VirtualDopingInfo:
+    """3DSC-like virtual doping output and explicit approximation features."""
+
+    distributions: list[dict[str, float]]
+    node_features: np.ndarray
+    graph_features: np.ndarray
+
+
+def _scaled_target_counts(
+    target_counts: dict[str, float],
+    base_counts: dict[str, float],
+) -> dict[str, float]:
+    common = [symbol for symbol in target_counts if symbol in base_counts]
+    if common:
+        numerator = sum(base_counts[symbol] * target_counts[symbol] for symbol in common)
+        denominator = sum(target_counts[symbol] ** 2 for symbol in common)
+        scale = numerator / denominator if denominator > 0 else 1.0
+    else:
+        base_total = sum(base_counts.values())
+        target_total = sum(target_counts.values())
+        scale = base_total / target_total if target_total > 0 else 1.0
+    return {symbol: amount * scale for symbol, amount in target_counts.items()}
+
+
+def _apply_virtual_formula_doping(
+    distributions: list[dict[str, float]],
+    target_formula: object,
+    max_new_elements: int = 1,
+    min_transfer: float = 1e-4,
+) -> VirtualDopingInfo:
+    """Project small formula differences onto existing sites as mixed occupancy.
+
+    This mirrors the 3DSC-style approximation: keep coordinates fixed and
+    substitute a small fraction of a depleted host element by an enriched
+    dopant element across the host sites.
+    """
+    node_features = np.zeros((len(distributions), NODE_APPROX_FEATURE_DIM), dtype=np.float32)
+    graph_features = np.zeros(APPROX_FEATURE_DIM, dtype=np.float32)
+    graph_features[0] = 1.0
+    target_raw = parse_formula_counts(target_formula)
+    if not target_raw:
+        return VirtualDopingInfo(distributions, node_features, graph_features)
+    base_counts = _counts_from_distributions(distributions)
+    if not base_counts:
+        return VirtualDopingInfo(distributions, node_features, graph_features)
+    new_elements = set(target_raw) - set(base_counts)
+    if len(new_elements) > max_new_elements:
+        graph_features[0] = 0.0
+        graph_features[2] = float(len(new_elements))
+        graph_features[9] = 1.0
+        return VirtualDopingInfo(distributions, node_features, graph_features)
+    target_counts = _scaled_target_counts(target_raw, base_counts)
+    symbols = sorted(set(base_counts) | set(target_counts))
+    diff = {
+        symbol: target_counts.get(symbol, 0.0) - base_counts.get(symbol, 0.0)
+        for symbol in symbols
+    }
+    positives = [(symbol, value) for symbol, value in diff.items() if value > min_transfer]
+    deficits = [(symbol, -value) for symbol, value in diff.items() if value < -min_transfer]
+    total_atoms = max(sum(base_counts.values()), 1e-8)
+    graph_features[2] = float(len(new_elements))
+    graph_features[3] = float(sum(abs(value) for value in diff.values()) / total_atoms)
+    graph_features[4] = float(max([abs(value) for value in diff.values()] or [0.0]) / total_atoms)
+    if not positives or not deficits:
+        return VirtualDopingInfo(distributions, node_features, graph_features)
+
+    adjusted = [dict(dist) for dist in distributions]
+    total_transfer = 0.0
+    max_site_fraction = 0.0
+    host_tokens: list[int] = []
+    dopant_tokens: list[int] = []
+    for dopant, dopant_amount in positives:
+        remaining = dopant_amount
+        for host, host_deficit in sorted(deficits, key=lambda item: item[1], reverse=True):
+            transfer = min(remaining, host_deficit)
+            if transfer <= min_transfer:
+                continue
+            host_total = sum(max(dist.get(host, 0.0), 0.0) for dist in adjusted)
+            if host_total <= min_transfer:
+                continue
+            try:
+                host_token = species_to_token(host)
+                dopant_token = species_to_token(dopant)
+            except Exception:
+                host_token = 0
+                dopant_token = 0
+            host_tokens.append(host_token)
+            dopant_tokens.append(dopant_token)
+            for site_idx, dist in enumerate(adjusted):
+                host_occ = max(float(dist.get(host, 0.0)), 0.0)
+                if host_occ <= 0:
+                    continue
+                delta = transfer * host_occ / host_total
+                site_fraction = delta / max(host_occ, 1e-8)
+                dist[host] = max(0.0, host_occ - delta)
+                dist[dopant] = float(dist.get(dopant, 0.0)) + delta
+                node_features[site_idx, 0] = 1.0
+                node_features[site_idx, 1] += float(delta)
+                node_features[site_idx, 2] = max(node_features[site_idx, 2], float(site_fraction))
+                node_features[site_idx, 3] = float(host_token) / float(NUM_ELEMENT_TOKENS)
+                node_features[site_idx, 4] = float(dopant_token) / float(NUM_ELEMENT_TOKENS)
+                node_features[site_idx, 5] = abs(float(dopant_token - host_token)) / float(NUM_ELEMENT_TOKENS)
+                node_features[site_idx, 6] = 1.0 if dopant in new_elements else 0.0
+                node_features[site_idx, 7] += 1.0
+                total_transfer += float(delta)
+                max_site_fraction = max(max_site_fraction, float(site_fraction))
+            remaining -= transfer
+            if remaining <= min_transfer:
+                break
+
+    graph_features[0] = 0.0
+    graph_features[1] = 1.0 if total_transfer > min_transfer else 0.0
+    graph_features[5] = float(total_transfer / total_atoms)
+    graph_features[6] = float(max_site_fraction)
+    graph_features[7] = float(len(set(host_tokens)))
+    graph_features[8] = float(len(set(dopant_tokens)))
+    graph_features[10] = (float(sum(host_tokens)) / len(host_tokens) / NUM_ELEMENT_TOKENS) if host_tokens else 0.0
+    graph_features[11] = (float(sum(dopant_tokens)) / len(dopant_tokens) / NUM_ELEMENT_TOKENS) if dopant_tokens else 0.0
+    graph_features[12] = float(node_features[:, 0].sum() / max(len(distributions), 1))
+    return VirtualDopingInfo(
+        [normalize_site_distribution(dist, max(len(dist), 1)) for dist in adjusted],
+        node_features,
+        graph_features,
+    )
 
 
 def _image_range(structure: Structure, cutoff_radius: float) -> range:
@@ -260,6 +413,28 @@ def _build_angles(
     )
 
 
+def _structure_global_features(structure: Structure, num_sites: int) -> np.ndarray:
+    """Return compact, scale-stable unit-cell features for one crystal."""
+    lengths = np.asarray(structure.lattice.abc, dtype=np.float32)
+    angles = np.asarray(structure.lattice.angles, dtype=np.float32)
+    volume = float(max(structure.volume, 0.0))
+    site_count = float(max(num_sites, 1))
+    density = float(getattr(structure, "density", 0.0) or 0.0)
+    return np.asarray(
+        [
+            math.log1p(float(lengths[0])),
+            math.log1p(float(lengths[1])),
+            math.log1p(float(lengths[2])),
+            float(angles[0]) / 180.0,
+            float(angles[1]) / 180.0,
+            float(angles[2]) / 180.0,
+            math.log1p(volume / site_count),
+            density / 20.0,
+        ],
+        dtype=np.float32,
+    )
+
+
 def build_graph_from_cif(
     cif_path: str | Path,
     max_species_per_site: int = 4,
@@ -269,6 +444,8 @@ def build_graph_from_cif(
     n_edge_rbf: int = 80,
     n_angle_rbf: int = 40,
     include_self_edges: bool = False,
+    target_formula: object | None = None,
+    apply_virtual_doping: bool = False,
 ) -> GraphData:
     """Build one occupancy-aware ALIGNN-style graph from a CIF file."""
     try:
@@ -280,6 +457,16 @@ def build_graph_from_cif(
     except Exception as exc:
         warnings.warn(f"Failed to parse CIF {cif_path}: {exc}", RuntimeWarning)
         raise
+    original_formula = formula
+    approx_features = np.zeros(APPROX_FEATURE_DIM, dtype=np.float32)
+    approx_features[0] = 1.0
+    node_approx_features = np.zeros((len(distributions), NODE_APPROX_FEATURE_DIM), dtype=np.float32)
+    if apply_virtual_doping and target_formula is not None:
+        doping_info = _apply_virtual_formula_doping(distributions, target_formula)
+        distributions = doping_info.distributions
+        approx_features = doping_info.graph_features
+        node_approx_features = doping_info.node_features
+        formula = _formula_from_distributions(distributions)
 
     species_idx: list[np.ndarray] = []
     species_occ: list[np.ndarray] = []
@@ -300,6 +487,10 @@ def build_graph_from_cif(
     edge_rbf = gaussian_rbf_np(edge_distance, 0.0, cutoff_radius, n_edge_rbf)
     line_edge_index, angles, angle_triplet_index = _build_angles(edge_index, edge_vector)
     angle_rbf = gaussian_rbf_np(angles, 0.0, math.pi, n_angle_rbf)
+    structure_features = _structure_global_features(structure, len(distributions))
+    formula_features = formula_descriptor(formula)
+    formula_mismatch_features = formula_cif_mismatch(formula_features, formula)
+    confidence_features = np.zeros(8, dtype=np.float32)
 
     return GraphData(
         node_species_idx=torch.as_tensor(np.stack(species_idx), dtype=torch.long),
@@ -313,6 +504,13 @@ def build_graph_from_cif(
         angle=torch.as_tensor(angles, dtype=torch.float32),
         angle_rbf=torch.as_tensor(angle_rbf, dtype=torch.float32),
         angle_triplet_index=torch.as_tensor(angle_triplet_index, dtype=torch.long),
+        structure_features=torch.as_tensor(structure_features, dtype=torch.float32),
+        formula_features=torch.as_tensor(formula_features, dtype=torch.float32),
+        formula_mismatch_features=torch.as_tensor(formula_mismatch_features, dtype=torch.float32),
+        confidence_features=torch.as_tensor(confidence_features, dtype=torch.float32),
+        approx_features=torch.as_tensor(approx_features, dtype=torch.float32),
+        node_approx_features=torch.as_tensor(node_approx_features, dtype=torch.float32),
         cif_path=str(cif_path),
         formula=formula,
+        original_formula=original_formula,
     )

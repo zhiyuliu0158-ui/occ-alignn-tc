@@ -6,9 +6,23 @@ import numpy as np
 import pandas as pd
 
 
-def _valid_split_values(series: pd.Series) -> bool:
-    values = set(series.dropna().astype(str).str.lower())
-    return {"train", "val", "test"}.issubset(values)
+VALID_SPLITS = {"train", "val", "test"}
+
+
+def _normalize_existing_split(series: pd.Series) -> pd.Series | None:
+    values = series.astype(str).str.strip().str.lower()
+    missing = values.isin({"", "nan", "none", "null"})
+    non_empty = values[~missing]
+    if non_empty.empty:
+        return None
+    if missing.any():
+        raise ValueError("Existing split column contains missing values.")
+    invalid = sorted(set(non_empty) - VALID_SPLITS)
+    if invalid:
+        raise ValueError(
+            f"Invalid split values {invalid}; expected values from {sorted(VALID_SPLITS)}."
+        )
+    return values
 
 
 def ensure_split(
@@ -22,9 +36,11 @@ def ensure_split(
 ) -> pd.DataFrame:
     """Use an existing split column or create grouped train/val/test splits."""
     df = dataframe.copy()
-    if split_column in df.columns and _valid_split_values(df[split_column]):
-        df[split_column] = df[split_column].astype(str).str.lower()
-        return df
+    if split_column in df.columns:
+        normalized_split = _normalize_existing_split(df[split_column])
+        if normalized_split is not None:
+            df[split_column] = normalized_split
+            return df
 
     if group_column in df.columns:
         groups = df[group_column].fillna("").astype(str)

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 from occ_alignn.data.collate import collate_graphs
 from occ_alignn.data.dataset import CifTcDataset, load_dataframe
@@ -29,6 +32,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    distributed = "RANK" in os.environ and "WORLD_SIZE" in os.environ
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    rank = int(os.environ.get("RANK", "0"))
+    if distributed:
+        dist.init_process_group(backend="nccl")
+        if args.device == "cpu":
+            raise ValueError("Distributed training requires --device cuda or auto.")
+        torch.cuda.set_device(local_rank)
+
     config = load_config(args.config)
     training_cfg = config.get("training", {})
     data_cfg = config.get("data", {})
@@ -36,6 +48,8 @@ def main() -> None:
     device = "cuda" if args.device == "auto" and torch.cuda.is_available() else args.device
     if device == "auto":
         device = "cpu"
+    if distributed:
+        device = f"cuda:{local_rank}"
 
     data_csv = Path(args.data_csv)
     df = load_dataframe(data_csv)
@@ -58,10 +72,16 @@ def main() -> None:
         raise ValueError("Training split is empty.")
     if len(val_dataset) == 0:
         val_dataset = test_dataset if len(test_dataset) > 0 else train_dataset
+    train_sampler = (
+        DistributedSampler(train_dataset, shuffle=True, drop_last=False)
+        if distributed
+        else None
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=num_workers,
         collate_fn=collate_graphs,
     )
@@ -84,8 +104,24 @@ def main() -> None:
         else None
     )
     model = PBOccALIGNNFullTc(config)
-    trainer = Trainer(model, config, args.output_dir, device=device)
-    trainer.fit(train_loader, val_loader, test_loader, resume_path=args.resume)
+    if distributed:
+        model_cfg = config.get("model", {})
+        find_unused_parameters = (
+            str(training_cfg.get("regression_loss", "gaussian_nll")) != "gaussian_nll"
+            or not bool(model_cfg.get("use_pressure_field_film", True))
+        )
+        model = torch.nn.parallel.DistributedDataParallel(
+            model.to(device),
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=find_unused_parameters,
+        )
+    trainer = Trainer(model, config, args.output_dir, device=device, is_main_process=rank == 0)
+    try:
+        trainer.fit(train_loader, val_loader, test_loader, resume_path=args.resume)
+    finally:
+        if distributed:
+            dist.destroy_process_group()
 
 
 if __name__ == "__main__":

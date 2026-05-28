@@ -9,6 +9,12 @@ from torch import nn
 
 from occ_alignn.data.collate import GraphBatch
 from occ_alignn.featurizers.elements import NUM_ELEMENT_TOKENS, PAD_TOKEN_ID
+from occ_alignn.featurizers.formula import (
+    APPROX_FEATURE_DIM,
+    FORMULA_DESCRIPTOR_DIM,
+    FORMULA_MISMATCH_DIM,
+    NODE_APPROX_FEATURE_DIM,
+)
 from occ_alignn.models.heads import GaussianTcHead
 from occ_alignn.nn.film import ConditionEncoder, FiLM, mlp
 from occ_alignn.nn.message_passing import ALIGNNLayer
@@ -20,6 +26,7 @@ class PBOccALIGNNFullTc(nn.Module):
 
     node_extra_dim = 16
     disorder_dim = 4
+    confidence_dim = 8
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__()
@@ -32,6 +39,13 @@ class PBOccALIGNNFullTc(nn.Module):
         self.use_explicit_triplet = bool(model_cfg.get("use_explicit_triplet", True))
         self.use_pressure_field_film = bool(model_cfg.get("use_pressure_field_film", True))
         self.use_max_pool = bool(model_cfg.get("use_max_pool", False))
+        self.use_composition_branch = bool(model_cfg.get("use_composition_branch", True))
+        self.use_formula_branch = bool(model_cfg.get("use_formula_branch", True))
+        self.use_structure_branch = bool(model_cfg.get("use_structure_branch", True))
+        self.use_mismatch_branch = bool(model_cfg.get("use_mismatch_branch", True))
+        self.use_confidence_branch = bool(model_cfg.get("use_confidence_branch", False))
+        self.use_attention_pool = bool(model_cfg.get("use_attention_pool", True))
+        self.use_approximation_branch = bool(model_cfg.get("use_approximation_branch", False))
         dropout = float(model_cfg.get("dropout", 0.1))
 
         self.element_embedding = nn.Embedding(
@@ -39,8 +53,11 @@ class PBOccALIGNNFullTc(nn.Module):
             self.element_emb_dim,
             padding_idx=PAD_TOKEN_ID,
         )
+        node_input_dim = 3 * self.element_emb_dim + self.node_extra_dim
+        if self.use_approximation_branch:
+            node_input_dim += NODE_APPROX_FEATURE_DIM
         self.node_projector = mlp(
-            self.element_emb_dim + self.node_extra_dim,
+            node_input_dim,
             self.hidden_dim,
             self.hidden_dim,
             dropout,
@@ -69,7 +86,43 @@ class PBOccALIGNNFullTc(nn.Module):
             ALIGNNLayer(self.hidden_dim, dropout) for _ in range(self.num_layers)
         )
         pooled_dim = 2 * self.hidden_dim if self.use_max_pool else self.hidden_dim
-        self.head = GaussianTcHead(pooled_dim + self.hidden_dim, self.hidden_dim, dropout)
+        self.attention_score = mlp(3 * self.hidden_dim, self.hidden_dim, 1, dropout)
+        graph_input_dim = pooled_dim + (self.hidden_dim if self.use_attention_pool else 0)
+        self.graph_projector = mlp(graph_input_dim, self.hidden_dim, self.hidden_dim, dropout)
+        self.composition_projector = mlp(
+            NUM_ELEMENT_TOKENS + 2 * self.element_emb_dim + self.node_extra_dim,
+            self.hidden_dim,
+            self.hidden_dim,
+            dropout,
+        )
+        self.structure_projector = mlp(8, self.hidden_dim, self.hidden_dim, dropout)
+        self.formula_projector = mlp(
+            FORMULA_DESCRIPTOR_DIM,
+            self.hidden_dim,
+            self.hidden_dim,
+            dropout,
+        )
+        self.mismatch_projector = mlp(
+            FORMULA_MISMATCH_DIM,
+            self.hidden_dim,
+            self.hidden_dim,
+            dropout,
+        )
+        self.confidence_projector = mlp(
+            self.confidence_dim,
+            self.hidden_dim,
+            self.hidden_dim,
+            dropout,
+        )
+        self.approx_projector = mlp(
+            APPROX_FEATURE_DIM,
+            self.hidden_dim,
+            self.hidden_dim,
+            dropout,
+        )
+        self.material_projector = mlp(6 * self.hidden_dim, self.hidden_dim, self.hidden_dim, dropout)
+        self.fusion_gate = mlp(8 * self.hidden_dim, self.hidden_dim, self.hidden_dim, dropout)
+        self.head = GaussianTcHead(10 * self.hidden_dim, self.hidden_dim, dropout)
 
     def _weighted_node_embedding(
         self,
@@ -78,6 +131,29 @@ class PBOccALIGNNFullTc(nn.Module):
     ) -> torch.Tensor:
         emb = self.element_embedding(species_idx)
         return (species_occ.unsqueeze(-1) * emb).sum(dim=1)
+
+    def _site_species_embedding(
+        self,
+        species_idx: torch.Tensor,
+        species_occ: torch.Tensor,
+    ) -> torch.Tensor:
+        """Represent mixed sites without hiding low-occupancy dopants.
+
+        The old weighted mean is still included, but majority and minority
+        species get explicit channels. This lets a La0.975/Nd0.025 site expose
+        an Nd signal instead of changing the La embedding by only 2.5%.
+        """
+        emb = self.element_embedding(species_idx)
+        valid = (species_idx != PAD_TOKEN_ID) & (species_occ > 0)
+        weighted = (species_occ.unsqueeze(-1) * emb).sum(dim=1)
+        majority = emb[:, 0]
+        minority_mask = valid.clone()
+        minority_mask[:, 0] = False
+        minority_count = minority_mask.sum(dim=1, keepdim=True).clamp_min(1)
+        minority = (minority_mask.unsqueeze(-1).to(emb.dtype) * emb).sum(dim=1)
+        minority = minority / minority_count.to(emb.dtype)
+        minority = torch.where(minority_mask.any(dim=1, keepdim=True), minority, torch.zeros_like(minority))
+        return torch.cat([weighted, majority, minority], dim=-1)
 
     def _expected_pair_embedding(self, batch: GraphBatch) -> torch.Tensor:
         if batch.edge_index.numel() == 0:
@@ -139,8 +215,11 @@ class PBOccALIGNNFullTc(nn.Module):
         return output
 
     def _initial_embeddings(self, batch: GraphBatch) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        node_emb = self._weighted_node_embedding(batch.node_species_idx, batch.node_species_occ)
-        node_h = self.node_projector(torch.cat([node_emb, batch.node_extra_features], dim=-1))
+        node_emb = self._site_species_embedding(batch.node_species_idx, batch.node_species_occ)
+        node_features = [node_emb, batch.node_extra_features]
+        if self.use_approximation_branch:
+            node_features.append(batch.node_approx_features)
+        node_h = self.node_projector(torch.cat(node_features, dim=-1))
 
         pair = self._expected_pair_embedding(batch)
         disorder = batch.node_extra_features[:, -self.disorder_dim :]
@@ -180,6 +259,76 @@ class PBOccALIGNNFullTc(nn.Module):
             angle_h = self.angle_mlp(angle_features)
         return node_h, edge_h, angle_h
 
+    def _composition_embedding(self, batch: GraphBatch) -> torch.Tensor:
+        """Build graph-level composition features from partially occupied sites."""
+        species_idx = batch.node_species_idx
+        species_occ = batch.node_species_occ
+        valid = species_idx != PAD_TOKEN_ID
+        flat_idx = species_idx.reshape(-1)
+        flat_occ = species_occ.reshape(-1) * valid.reshape(-1).to(species_occ.dtype)
+        flat_graph = batch.batch.unsqueeze(1).expand_as(species_idx).reshape(-1)
+
+        counts = torch.zeros(
+            (batch.num_graphs, NUM_ELEMENT_TOKENS),
+            dtype=species_occ.dtype,
+            device=species_occ.device,
+        )
+        counts.index_put_((flat_graph, flat_idx), flat_occ, accumulate=True)
+        counts[:, PAD_TOKEN_ID] = 0.0
+        counts = counts / counts.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+
+        site_emb = self._weighted_node_embedding(species_idx, species_occ)
+        emb_sum = torch.zeros(
+            (batch.num_graphs, self.element_emb_dim),
+            dtype=site_emb.dtype,
+            device=site_emb.device,
+        )
+        emb_sum.index_add_(0, batch.batch, site_emb)
+        graph_sizes = torch.bincount(batch.batch, minlength=batch.num_graphs).to(site_emb.dtype)
+        emb_mean = emb_sum / graph_sizes.unsqueeze(-1).clamp_min(1.0)
+
+        emb_max = torch.full_like(emb_sum, -torch.inf)
+        extra_sum = torch.zeros(
+            (batch.num_graphs, self.node_extra_dim),
+            dtype=batch.node_extra_features.dtype,
+            device=batch.node_extra_features.device,
+        )
+        extra_sum.index_add_(0, batch.batch, batch.node_extra_features)
+        for graph_id in range(batch.num_graphs):
+            mask = batch.batch == graph_id
+            if bool(mask.any()):
+                emb_max[graph_id] = site_emb[mask].max(dim=0).values
+        emb_max = torch.where(torch.isfinite(emb_max), emb_max, torch.zeros_like(emb_max))
+        extra_mean = extra_sum / graph_sizes.unsqueeze(-1).clamp_min(1.0)
+
+        features = torch.cat([counts, emb_mean, emb_max, extra_mean], dim=-1)
+        if not self.use_composition_branch:
+            return torch.zeros(
+                (batch.num_graphs, self.hidden_dim),
+                dtype=features.dtype,
+                device=features.device,
+            )
+        return self.composition_projector(features)
+
+    def _attention_pool(
+        self,
+        node_h: torch.Tensor,
+        comp_repr: torch.Tensor,
+        z_condition: torch.Tensor,
+        batch_index: torch.Tensor,
+        num_graphs: int,
+    ) -> torch.Tensor:
+        """Condition-aware node attention pooling."""
+        context = torch.cat([node_h, comp_repr[batch_index], z_condition[batch_index]], dim=-1)
+        scores = self.attention_score(context).squeeze(-1)
+        pooled = torch.zeros((num_graphs, node_h.shape[-1]), dtype=node_h.dtype, device=node_h.device)
+        for graph_id in range(num_graphs):
+            mask = batch_index == graph_id
+            if bool(mask.any()):
+                weights = torch.softmax(scores[mask], dim=0)
+                pooled[graph_id] = (weights.unsqueeze(-1) * node_h[mask]).sum(dim=0)
+        return pooled
+
     def forward(self, batch: GraphBatch) -> dict[str, torch.Tensor]:
         """Run a forward pass on a GraphBatch."""
         z_condition = self.condition_encoder(
@@ -190,6 +339,22 @@ class PBOccALIGNNFullTc(nn.Module):
             batch.match_type_id,
             batch.fidelity_id,
         )
+        comp_repr = self._composition_embedding(batch)
+        struct_repr = self.structure_projector(batch.structure_features)
+        formula_repr = self.formula_projector(batch.formula_features)
+        mismatch_repr = self.mismatch_projector(batch.formula_mismatch_features)
+        confidence_repr = self.confidence_projector(batch.confidence_features)
+        approx_repr = self.approx_projector(batch.approx_features)
+        if not self.use_structure_branch:
+            struct_repr = torch.zeros_like(struct_repr)
+        if not self.use_formula_branch:
+            formula_repr = torch.zeros_like(formula_repr)
+        if not self.use_mismatch_branch:
+            mismatch_repr = torch.zeros_like(mismatch_repr)
+        if not self.use_confidence_branch:
+            confidence_repr = torch.zeros_like(confidence_repr)
+        if not self.use_approximation_branch:
+            approx_repr = torch.zeros_like(approx_repr)
         node_h, edge_h, angle_h = self._initial_embeddings(batch)
         for layer_id, layer in enumerate(self.layers):
             if self.use_pressure_field_film:
@@ -208,5 +373,55 @@ class PBOccALIGNNFullTc(nn.Module):
             if self.use_max_pool
             else mean_pool(node_h, batch.batch, batch.num_graphs)
         )
-        final = torch.cat([pooled, z_condition], dim=-1)
+        if self.use_attention_pool:
+            attn_pooled = self._attention_pool(
+                node_h,
+                comp_repr,
+                z_condition,
+                batch.batch,
+                batch.num_graphs,
+            )
+            graph_input = torch.cat([pooled, attn_pooled], dim=-1)
+        else:
+            graph_input = pooled
+        graph_repr = self.graph_projector(graph_input)
+        material_repr = self.material_projector(
+            torch.cat(
+                [formula_repr, comp_repr, struct_repr, mismatch_repr, confidence_repr, approx_repr],
+                dim=-1,
+            )
+        )
+        gate = torch.sigmoid(
+            self.fusion_gate(
+                torch.cat(
+                    [
+                        graph_repr,
+                        formula_repr,
+                        comp_repr,
+                        struct_repr,
+                        mismatch_repr,
+                        confidence_repr,
+                        approx_repr,
+                        z_condition,
+                    ],
+                    dim=-1,
+                )
+            )
+        )
+        fused = gate * graph_repr + (1.0 - gate) * material_repr
+        final = torch.cat(
+            [
+                fused,
+                graph_repr,
+                formula_repr,
+                comp_repr,
+                struct_repr,
+                mismatch_repr,
+                confidence_repr,
+                approx_repr,
+                material_repr,
+                z_condition,
+            ],
+            dim=-1,
+        )
         return self.head(final)

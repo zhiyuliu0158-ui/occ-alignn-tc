@@ -69,21 +69,30 @@ def _category_id(value: object, vocab: list[str], default: str = "unknown") -> i
     return vocab.index(text)
 
 
-def parse_conditions(row: Mapping[str, object]) -> ConditionFeatures:
+def _condition_vector(value: float, unknown: int, transform: str, scale: float) -> np.ndarray:
+    log_value = math.log1p(max(value, 0.0))
+    if transform == "log1p_scaled":
+        features = [log_value, log_value / scale, unknown]
+    elif transform == "raw_log":
+        features = [value, log_value, unknown]
+    else:
+        raise ValueError(f"Unsupported condition transform: {transform}")
+    return np.asarray(features, dtype=np.float32)
+
+
+def parse_conditions(
+    row: Mapping[str, object],
+    pressure_transform: str = "raw_log",
+    field_transform: str = "raw_log",
+) -> ConditionFeatures:
     """Parse pressure, magnetic field, field direction, and metadata columns."""
     pressure_value, pressure_unknown = parse_float_with_unknown(row.get("pressure_GPa"))
     field_value, field_unknown = parse_float_with_unknown(row.get("magnetic_field_T"))
     direction = row.get("field_direction", "unknown")
     if direction is None or str(direction).strip() == "":
         direction = "unknown"
-    pressure = np.asarray(
-        [pressure_value, math.log1p(max(pressure_value, 0.0)), pressure_unknown],
-        dtype=np.float32,
-    )
-    field = np.asarray(
-        [field_value, math.log1p(max(field_value, 0.0)), field_unknown],
-        dtype=np.float32,
-    )
+    pressure = _condition_vector(pressure_value, pressure_unknown, pressure_transform, scale=6.0)
+    field = _condition_vector(field_value, field_unknown, field_transform, scale=4.0)
     return ConditionFeatures(
         pressure=pressure,
         field=field,

@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from occ_alignn.data.graph import GraphData, build_graph_from_cif
+from occ_alignn.featurizers.formula import formula_cif_mismatch, formula_descriptor
 from occ_alignn.featurizers.occupancy import parse_conditions
 
 
@@ -53,6 +54,61 @@ def _parse_tc(value: object, require_target: bool) -> tuple[float | None, float 
     return float(math.log1p(max(tc_k, 0.0))), tc_k
 
 
+def _row_formula(row: pd.Series) -> object:
+    for column in ("formula_standardized", "formula_reduced", "formula", "chemical_formula"):
+        if column in row and not pd.isna(row.get(column)):
+            text = str(row.get(column)).strip()
+            if text and text.lower() not in {"nan", "none", "null", "unknown"}:
+                return text
+    return ""
+
+
+def _float_or_zero(value: object) -> float:
+    if value is None or pd.isna(value):
+        return 0.0
+    try:
+        out = float(value)
+    except Exception:
+        return 0.0
+    return 0.0 if math.isnan(out) or math.isinf(out) else out
+
+
+def _is_text(row: pd.Series, column: str, value: str) -> float:
+    if column not in row or pd.isna(row.get(column)):
+        return 0.0
+    return 1.0 if str(row.get(column)).strip() == value else 0.0
+
+
+def _confidence_features(row: pd.Series) -> torch.Tensor:
+    composition_l1 = _float_or_zero(row.get("formula_level_cif_composition_l1"))
+    return torch.tensor(
+        [
+            composition_l1,
+            min(composition_l1, 1.0),
+            _is_text(row, "match_type", "formula_exact"),
+            _is_text(row, "match_type", "formula_similarity"),
+            _is_text(row, "fidelity", "exact"),
+            _is_text(row, "fidelity", "synthetic_doped"),
+            _is_text(row, "formula_level_cif_status", "copied_exact"),
+            _is_text(row, "formula_level_cif_status", "synthetic_doped"),
+        ],
+        dtype=torch.float32,
+    )
+
+
+def _sample_weight(row: pd.Series, training_cfg: dict[str, Any]) -> float:
+    if not bool(training_cfg.get("use_sample_weight", False)):
+        return 1.0
+    tc_k = _float_or_zero(row.get("Tc_K"))
+    pressure = _float_or_zero(row.get("pressure_GPa"))
+    weight = 1.0
+    if tc_k >= float(training_cfg.get("sample_weight_high_tc_threshold", 80.0)):
+        weight *= float(training_cfg.get("sample_weight_high_tc", 1.5))
+    if pressure >= float(training_cfg.get("sample_weight_high_pressure_threshold", 50.0)):
+        weight *= float(training_cfg.get("sample_weight_high_pressure", 1.5))
+    return min(weight, float(training_cfg.get("sample_weight_max", 3.0)))
+
+
 class CifTcDataset(Dataset[GraphData]):
     """Torch Dataset that converts rows into occupancy-aware crystal graphs."""
 
@@ -83,7 +139,10 @@ class CifTcDataset(Dataset[GraphData]):
     def _build_graph(self, row: pd.Series) -> GraphData:
         model_cfg = self.config.get("model", {})
         data_cfg = self.config.get("data", {})
+        condition_cfg = self.config.get("conditions", {})
+        training_cfg = self.config.get("training", {})
         cif_path = _resolve_path(row.get("cif_path"), self.csv_dir)
+        row_formula = _row_formula(row)
         graph = build_graph_from_cif(
             cif_path=cif_path,
             max_species_per_site=int(model_cfg.get("max_species_per_site", 4)),
@@ -93,9 +152,16 @@ class CifTcDataset(Dataset[GraphData]):
             n_edge_rbf=int(model_cfg.get("n_edge_rbf", 80)),
             n_angle_rbf=int(model_cfg.get("n_angle_rbf", 40)),
             include_self_edges=bool(model_cfg.get("include_self_edges", False)),
+            target_formula=row_formula,
+            apply_virtual_doping=bool(model_cfg.get("apply_virtual_formula_doping", False)),
         )
-        conditions = parse_conditions(row.to_dict())
+        conditions = parse_conditions(
+            row.to_dict(),
+            pressure_transform=str(condition_cfg.get("pressure_transform", "raw_log")),
+            field_transform=str(condition_cfg.get("field_transform", "raw_log")),
+        )
         target, tc_k = _parse_tc(row.get("Tc_K"), self.require_target)
+        formula_features = formula_descriptor(row_formula)
         graph.pressure = torch.as_tensor(conditions.pressure, dtype=torch.float32)
         graph.field = torch.as_tensor(conditions.field, dtype=torch.float32)
         graph.field_direction_id = conditions.field_direction_id
@@ -104,6 +170,13 @@ class CifTcDataset(Dataset[GraphData]):
         graph.fidelity_id = conditions.fidelity_id
         graph.target = target
         graph.tc_k = tc_k
+        graph.formula_features = torch.as_tensor(formula_features, dtype=torch.float32)
+        graph.formula_mismatch_features = torch.as_tensor(
+            formula_cif_mismatch(formula_features, graph.original_formula),
+            dtype=torch.float32,
+        )
+        graph.confidence_features = _confidence_features(row)
+        graph.sample_weight = _sample_weight(row, training_cfg)
         graph.sample_id = str(row.get("sample_id", ""))
         graph.cif_path = cif_path
         graph.metadata = row.to_dict()

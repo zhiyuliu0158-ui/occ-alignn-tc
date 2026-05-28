@@ -92,3 +92,37 @@ def test_unknown_pressure_and_field() -> None:
     assert parsed.field.tolist() == [0.0, 0.0, 1.0]
     assert parsed.pressure_is_unknown == 1
     assert parsed.field_is_unknown == 1
+
+
+def test_pressure_and_field_default_to_raw_log_features() -> None:
+    parsed = parse_conditions(
+        {
+            "pressure_GPa": "170",
+            "magnetic_field_T": "14",
+            "field_direction": "parallel_c",
+        }
+    )
+
+    assert np.isclose(parsed.pressure[0], 170.0)
+    assert np.isclose(parsed.pressure[1], np.log1p(170.0))
+    assert parsed.pressure[2] == 0.0
+    assert np.isclose(parsed.field[0], 14.0)
+    assert np.isclose(parsed.field[1], np.log1p(14.0))
+    assert parsed.field[2] == 0.0
+
+
+def test_pressure_and_field_can_use_log_scaled_features() -> None:
+    parsed = parse_conditions(
+        {
+            "pressure_GPa": "170",
+            "magnetic_field_T": "14",
+            "field_direction": "parallel_c",
+        },
+        pressure_transform="log1p_scaled",
+        field_transform="log1p_scaled",
+    )
+
+    assert np.isclose(parsed.pressure[0], np.log1p(170.0))
+    assert np.isclose(parsed.pressure[1], np.log1p(170.0) / 6.0)
+    assert np.isclose(parsed.field[0], np.log1p(14.0))
+    assert np.isclose(parsed.field[1], np.log1p(14.0) / 4.0)

@@ -41,3 +41,39 @@ def test_one_training_step(tmp_path) -> None:
     loss.backward()
     optimizer.step()
     assert torch.isfinite(loss)
+
+
+def test_mixed_log_raw_huber_loss_backward() -> None:
+    outputs = {
+        "logtc_mu": torch.tensor([torch.log1p(torch.tensor(40.0)).item()], requires_grad=True),
+        "logtc_logvar": torch.zeros(1),
+    }
+    target = torch.log1p(torch.tensor([180.0]))
+
+    loss = regression_loss(
+        outputs,
+        target,
+        "mixed_log_raw_huber",
+        raw_weight=0.15,
+        raw_scale=50.0,
+    )
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert outputs["logtc_mu"].grad is not None
+
+
+def test_weighted_huber_loss_changes_gradient() -> None:
+    outputs = {
+        "logtc_mu": torch.tensor([1.0, 1.0], requires_grad=True),
+        "logtc_logvar": torch.zeros(2),
+    }
+    target = torch.tensor([1.0, 3.0])
+    weight = torch.tensor([1.0, 4.0])
+
+    loss = regression_loss(outputs, target, "huber", weight=weight)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert outputs["logtc_mu"].grad is not None
+    assert abs(outputs["logtc_mu"].grad[1]) > abs(outputs["logtc_mu"].grad[0])

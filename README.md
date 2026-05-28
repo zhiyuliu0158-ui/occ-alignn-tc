@@ -107,6 +107,7 @@ zero, parallel_c, parallel_ab, parallel_a, parallel_b, powder, unknown
 ```bash
 conda env create -f environment.yml
 conda activate pb-occ-alignn-full-tc
+python -m pip install -e . --no-build-isolation
 ```
 
 或使用 venv：

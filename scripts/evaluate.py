@@ -48,6 +48,11 @@ def main() -> None:
         seed=int(training_cfg.get("seed", 42)),
     )
     dataset = CifTcDataset(df, config, data_csv.parent, split=args.split, split_column=split_column)
+    if len(dataset) == 0:
+        available = sorted(df[split_column].dropna().astype(str).str.lower().unique().tolist())
+        raise ValueError(
+            f"Split {args.split!r} is empty. Available splits in {data_csv}: {available}."
+        )
     loader = DataLoader(
         dataset,
         batch_size=int(training_cfg.get("batch_size", 8)),
