@@ -368,6 +368,128 @@ Worst-error concentration:
 The error is not only a handful of samples, but the extreme high-pressure/high-Tc
 tail has a large effect on RMSE and R2.
 
+## Exact-first Real-CIF Experiment
+
+This experiment was added to test whether 3DSC-style synthetic/approximate CIFs
+were the main reason for weak model performance.
+
+### Dataset
+
+- Local source: `D:\SC-Tc\exact_first_all_current`
+- Remote source: `/data/home/intern002/ziyang/sc-tc/data/exact_first_all_current`
+- Raw CSV: `tc_data_exact_first_no_leak.csv`
+- Cleaned training CSV: `tc_data_exact_first_no_leak_tc_valid.csv`
+- CIF files: 918
+- Missing referenced CIF paths after upload fix: 0
+- Artificial doping included: false
+- Rows before filtering missing `Tc_K`: 14823
+- Rows after filtering missing `Tc_K`: 14798
+
+The raw no-leak CSV contained 25 rows with missing `Tc_K`:
+
+| Split | Missing Tc_K |
+|---|---:|
+| train | 11 |
+| val | 2 |
+| test | 12 |
+
+The cleaned split sizes were:
+
+| Split | Rows |
+|---|---:|
+| train | 9603 |
+| val | 1477 |
+| test | 3718 |
+
+### Training Run
+
+- Config: `configs/occ_alignn_comp_formula_huber_tc.yaml`
+- Slurm job: `133413`
+- Partition: `gpu4090_128`
+- Node: `gpu40903`
+- Runtime: `06:00:13`
+- Early stopping: epoch 25
+- Output root:
+  `/data/home/intern002/ziyang/sc-tc/runs/exact_first_a_no_leak_tc_valid_4090_lr3e4`
+
+The first attempt, job `133223`, failed after `00:05:55` because the raw CSV
+contained missing `Tc_K` values. The cleaned CSV above was used for the final
+run.
+
+### Overall Metrics
+
+| Split | MAE K | RMSE K | R2 | MSLE |
+|---|---:|---:|---:|---:|
+| val | 15.079 | 31.352 | -0.087 | 1.109 |
+| test | 24.435 | 52.052 | 0.100 | 1.293 |
+
+Comparison with previous neural baselines:
+
+| Version | Test MAE K | Test R2 | Test MSLE |
+|---|---:|---:|---:|
+| Original A fixed split | 5.637 | 0.520 | 0.237 |
+| Original A 5-fold mean | 8.809 | 0.447 | 0.618 |
+| Exact-first real-CIF no-leak | 24.435 | 0.100 | 1.293 |
+
+### Test Subset Metrics
+
+| Subset | n | MAE K | RMSE K | R2 | MSLE |
+|---|---:|---:|---:|---:|---:|
+| all | 3718 | 24.435 | 52.052 | 0.100 | 1.293 |
+| exclude H3S | 3669 | 23.518 | 51.204 | 0.055 | 1.302 |
+| exclude Tc > 120 K | 3623 | 20.047 | 32.663 | 0.207 | 1.175 |
+| high pressure > 50 GPa | 73 | 61.473 | 74.443 | 0.064 | 1.160 |
+| formula_exact | 3718 | 24.435 | 52.052 | 0.100 | 1.293 |
+| formula_similarity | 0 | NaN | NaN | NaN | NaN |
+
+### Test Family Metrics
+
+| Family | n | MAE K | RMSE K | R2 | MSLE |
+|---|---:|---:|---:|---:|---:|
+| other | 3002 | 19.100 | 52.086 | 0.106 | 1.456 |
+| cuprate_or_cu_oxide | 713 | 46.978 | 52.019 | -4.141 | 0.611 |
+| carbon_based | 3 | 4.803 | 4.814 | -302.093 | 0.118 |
+
+### Test Tc-bin Metrics
+
+| Tc bin | n | MAE K | RMSE K | R2 | MSLE |
+|---|---:|---:|---:|---:|---:|
+| <=1 | 411 | 5.817 | 14.532 | -2709.997 | 1.849 |
+| 1-5 | 1261 | 4.803 | 12.168 | -116.061 | 0.877 |
+| 5-10 | 444 | 8.365 | 18.172 | -159.970 | 0.677 |
+| 10-20 | 325 | 17.345 | 28.838 | -150.672 | 1.146 |
+| 20-40 | 120 | 44.924 | 54.015 | -79.317 | 2.419 |
+| 40-80 | 356 | 57.059 | 58.367 | -30.749 | 1.550 |
+| 80-120 | 706 | 41.257 | 47.782 | -34.757 | 1.242 |
+| >120 | 95 | 191.764 | 255.641 | -2.046 | 5.764 |
+
+### Test Pressure-bin Metrics
+
+| Pressure bin | n | MAE K | RMSE K | R2 | MSLE |
+|---|---:|---:|---:|---:|---:|
+| 0 | 3266 | 24.880 | 53.720 | 0.058 | 1.283 |
+| 0-1 | 98 | 5.740 | 9.818 | 0.673 | 0.553 |
+| 1-10 | 182 | 4.852 | 11.422 | 0.529 | 0.644 |
+| 10-50 | 97 | 37.349 | 46.549 | -1.519 | 3.615 |
+| 50-100 | 18 | 19.839 | 25.089 | -0.377 | 1.641 |
+| >100 | 55 | 75.099 | 84.554 | -0.500 | 1.002 |
+
+### Interpretation
+
+This run does not support the hypothesis that 3DSC synthetic CIFs are the main
+reason for the weak performance. The exact-first real-CIF no-leak split is much
+harder than the previous fixed split and parent-CIF CV baseline, with especially
+large errors in high-Tc cuprates and `Tc > 120 K` samples.
+
+The likely issue is still dominated by data distribution and extrapolation
+regime:
+
+- the exact-first test split has many high-Tc samples;
+- all samples are exact formula matches, so the bad result is not caused by
+  synthetic-doped CIFs;
+- cuprates and high-pressure/high-Tc cases remain the most difficult subsets;
+- real CIFs alone do not solve the high-Tc extrapolation problem.
+
 ## Current Interpretation
 
 1. The dataset is usable, but a single aggregate score is misleading.
