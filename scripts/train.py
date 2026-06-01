@@ -13,6 +13,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from occ_alignn.data.collate import collate_graphs
 from occ_alignn.data.dataset import CifTcDataset, load_dataframe
+from occ_alignn.data.sampler import build_balanced_sampler
 from occ_alignn.data.split import ensure_split
 from occ_alignn.models.occ_alignn_full_tc import PBOccALIGNNFullTc
 from occ_alignn.training.trainer import Trainer
@@ -72,11 +73,10 @@ def main() -> None:
         raise ValueError("Training split is empty.")
     if len(val_dataset) == 0:
         val_dataset = test_dataset if len(test_dataset) > 0 else train_dataset
-    train_sampler = (
-        DistributedSampler(train_dataset, shuffle=True, drop_last=False)
-        if distributed
-        else None
-    )
+    if distributed and bool(training_cfg.get("use_balanced_sampler", False)):
+        raise ValueError("use_balanced_sampler is not supported with DistributedSampler.")
+    balanced_sampler = build_balanced_sampler(train_dataset, training_cfg)
+    train_sampler = DistributedSampler(train_dataset, shuffle=True, drop_last=False) if distributed else balanced_sampler
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,

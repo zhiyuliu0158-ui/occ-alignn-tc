@@ -1,0 +1,53 @@
+experiment:
+  name: real_formula_cif_a_mild_weighted
+  description: "A + mild sample weighting for high-Tc and high-pressure samples."
+
+model:
+  hidden_dim: 128
+  element_emb_dim: 80
+  num_layers: 4
+  dropout: 0.15
+  max_species_per_site: 4
+  cutoff_radius: 8.0
+  max_neighbors: 12
+  n_edge_rbf: 80
+  n_angle_rbf: 40
+  use_explicit_triplet: true
+  use_pressure_field_film: false
+  use_max_pool: true
+  use_composition_branch: true
+  use_formula_branch: true
+  use_structure_branch: false
+  use_mismatch_branch: false
+  use_confidence_branch: false
+  use_attention_pool: false
+  use_approximation_branch: false
+  apply_virtual_formula_doping: false
+
+training:
+  batch_size: 1
+  epochs: 80
+  lr: 0.0003
+  weight_decay: 0.00001
+  grad_clip: 1.0
+  early_stopping_patience: 12
+  seed: 42
+  regression_loss: huber
+  use_sample_weight: true
+  sample_weight_high_tc_threshold: 40.0
+  sample_weight_high_tc: 1.5
+  sample_weight_very_high_tc_threshold: 90.0
+  sample_weight_very_high_tc: 1.3333333333
+  sample_weight_high_pressure_threshold: 50.0
+  sample_weight_high_pressure: 1.5
+  sample_weight_max: 3.0
+  scheduler: reduce_on_plateau
+  num_workers: 0
+
+data:
+  split_column: split
+  group_column: parent_cif_id
+  frac_coord_tol: 0.0001
+  train_frac: 0.8
+  val_frac: 0.1
+  test_frac: 0.1

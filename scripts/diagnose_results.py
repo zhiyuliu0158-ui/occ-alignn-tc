@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from occ_alignn.analysis.regimes import add_regime_columns, standard_subset_masks
 from occ_alignn.training.metrics import grouped_metrics, regression_metrics
 from occ_alignn.utils.io import ensure_dir
 
@@ -26,42 +27,6 @@ def _prediction_path(run_dir: Path, split: str) -> Path:
 def _metrics_row(label: str, split: str, frame: pd.DataFrame) -> dict[str, object]:
     metrics = regression_metrics(frame["Tc_true_K"].to_numpy(), frame["Tc_pred_K"].to_numpy())
     return {"run": label, "split": split, "n": len(frame), **metrics}
-
-
-def _subset_masks(frame: pd.DataFrame) -> dict[str, pd.Series]:
-    pressure = pd.to_numeric(frame.get("pressure_GPa", 0.0), errors="coerce").fillna(0.0)
-    formula = frame["formula_standardized"].astype(str) if "formula_standardized" in frame else pd.Series("", index=frame.index)
-    match_type = frame["match_type"].astype(str) if "match_type" in frame else pd.Series("", index=frame.index)
-    return {
-        "all": pd.Series(True, index=frame.index),
-        "exclude_H3S": formula != "H3S",
-        "exclude_Tc_gt_120": frame["Tc_true_K"] <= 120.0,
-        "high_pressure_gt_50": pressure > 50.0,
-        "formula_exact": match_type == "formula_exact",
-        "formula_similarity": match_type == "formula_similarity",
-    }
-
-
-def _add_bins(frame: pd.DataFrame) -> pd.DataFrame:
-    out = frame.copy()
-    pressure = pd.to_numeric(out.get("pressure_GPa", 0.0), errors="coerce").fillna(0.0)
-    field = pd.to_numeric(out.get("magnetic_field_T", 0.0), errors="coerce").fillna(0.0)
-    out["tc_bin"] = pd.cut(
-        out["Tc_true_K"],
-        [-0.1, 1, 5, 10, 20, 40, 80, 120, float("inf")],
-        labels=["<=1", "1-5", "5-10", "10-20", "20-40", "40-80", "80-120", ">120"],
-    )
-    out["pressure_bin"] = pd.cut(
-        pressure,
-        [-0.1, 0, 1, 10, 50, 100, float("inf")],
-        labels=["0", "0-1", "1-10", "10-50", "50-100", ">100"],
-    )
-    out["field_bin"] = pd.cut(
-        field,
-        [-0.1, 0, 0.01, 1, 10, float("inf")],
-        labels=["0", "0-0.01", "0.01-1", "1-10", ">10"],
-    )
-    return out
 
 
 def main() -> None:
@@ -88,7 +53,7 @@ def main() -> None:
             if frame.empty:
                 continue
             comparison_rows.append(_metrics_row(label, split, frame))
-            for subset_name, mask in _subset_masks(frame).items():
+            for subset_name, mask in standard_subset_masks(frame).items():
                 subset = frame[mask.fillna(False)]
                 subset_rows.append(
                     {
@@ -99,7 +64,7 @@ def main() -> None:
                         **regression_metrics(subset["Tc_true_K"].to_numpy(), subset["Tc_pred_K"].to_numpy()),
                     }
                 )
-            binned = _add_bins(frame)
+            binned = add_regime_columns(frame)
             groups = grouped_metrics(
                 binned,
                 [
@@ -107,6 +72,7 @@ def main() -> None:
                     "match_type",
                     "fidelity",
                     "structure_source",
+                    "regime",
                     "tc_bin",
                     "pressure_bin",
                     "field_bin",

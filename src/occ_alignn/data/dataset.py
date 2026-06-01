@@ -104,6 +104,9 @@ def _sample_weight(row: pd.Series, training_cfg: dict[str, Any]) -> float:
     weight = 1.0
     if tc_k >= float(training_cfg.get("sample_weight_high_tc_threshold", 80.0)):
         weight *= float(training_cfg.get("sample_weight_high_tc", 1.5))
+    very_high_threshold = training_cfg.get("sample_weight_very_high_tc_threshold")
+    if very_high_threshold is not None and tc_k >= float(very_high_threshold):
+        weight *= float(training_cfg.get("sample_weight_very_high_tc", 1.0))
     if pressure >= float(training_cfg.get("sample_weight_high_pressure_threshold", 50.0)):
         weight *= float(training_cfg.get("sample_weight_high_pressure", 1.5))
     return min(weight, float(training_cfg.get("sample_weight_max", 3.0)))

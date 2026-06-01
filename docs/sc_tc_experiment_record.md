@@ -490,6 +490,92 @@ regime:
 - cuprates and high-pressure/high-Tc cases remain the most difficult subsets;
 - real CIFs alone do not solve the high-Tc extrapolation problem.
 
+## Implemented Distribution-First Tooling
+
+The following tooling was added to support the next optimization stage without
+changing the original A baseline by default.
+
+### Standard Regime Definitions
+
+Shared helpers now define the same bins and subsets for evaluator, diagnostics,
+split generation, and sampling:
+
+- Tc bins: `<=1`, `1-5`, `5-10`, `10-20`, `20-40`, `40-80`, `80-120`, `>120`
+- pressure bins: `0`, `0-1`, `1-10`, `10-50`, `50-100`, `>100`
+- field bins: `0`, `0-0.01`, `0.01-1`, `1-10`, `>10`
+- key regimes: MgB2, cuprate, high-Tc, very-high-Tc, high-pressure,
+  hydride-high-pressure, formula-exact, formula-similarity, exact fidelity,
+  synthetic-doped
+
+### Data Distribution Diagnostics
+
+New script:
+
+```bash
+python scripts/diagnose_data_distribution.py \
+  --data_csv data/real/tc_data.csv \
+  --out_dir runs/data_distribution_real
+```
+
+It writes:
+
+- `distribution_summary.csv`
+- `family_by_split.csv`
+- `tc_bin_by_split.csv`
+- `pressure_bin_by_split.csv`
+- `regime_by_split.csv`
+- `parent_cif_reuse.csv`
+- `formula_parent_cif_span.csv`
+- `high_pressure_rows.csv`
+- `high_pressure_concentration.csv`
+
+### Split Generation
+
+`scripts/make_cv_splits.py` now supports:
+
+- `grouped_cv`: parent-CIF grouped CV, preserving the previous behavior
+- `stratified`: one group-preserving split balanced by family/Tc/P bins
+- `family_holdout`: hold out any group containing a selected family
+- `regime_holdout`: hold out any group containing a selected regime
+
+Examples:
+
+```bash
+python scripts/make_cv_splits.py \
+  --data_csv data/real/tc_data.csv \
+  --out_dir data/real/cv5_parent_cif_seed42 \
+  --mode grouped_cv \
+  --n_folds 5 \
+  --group_column parent_cif_id
+
+python scripts/make_cv_splits.py \
+  --data_csv data/real/tc_data.csv \
+  --out_dir data/real/split_family_mgb2_holdout \
+  --mode family_holdout \
+  --holdout_value magnesium_boride \
+  --group_column parent_cif_id
+
+python scripts/make_cv_splits.py \
+  --data_csv data/real/tc_data.csv \
+  --out_dir data/real/split_hydride_hp_holdout \
+  --mode regime_holdout \
+  --holdout_value hydride_high_pressure \
+  --group_column parent_cif_id
+```
+
+### Low-risk Training Strategy Configs
+
+New configs:
+
+- `configs/occ_alignn_comp_formula_balanced_sampler_huber_tc.yaml`
+- `configs/occ_alignn_comp_formula_mild_weighted_huber_tc.yaml`
+
+The balanced sampler oversamples high-risk regimes while leaving the model and
+loss unchanged. Mild weighting uses lower capped sample weights than the earlier
+coarse weighted experiment.
+
+Both are opt-in. Original A remains unchanged.
+
 ## Current Interpretation
 
 1. The dataset is usable, but a single aggregate score is misleading.
