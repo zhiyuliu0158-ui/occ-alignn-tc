@@ -6,6 +6,7 @@ import pandas as pd
 
 from occ_alignn.analysis.regimes import add_regime_columns, standard_subset_masks
 from occ_alignn.data.sampler import regime_sample_weights
+from scripts.diagnose_data_distribution import _cif_reuse
 
 
 def test_add_regime_columns_marks_key_subsets() -> None:
@@ -77,3 +78,21 @@ def test_regime_sample_weights_are_capped() -> None:
     assert weights[0] == 4.0
     assert weights[1] == 4.0
     assert weights[2] == 1.0
+
+
+def test_cif_reuse_handles_numeric_pressure_columns() -> None:
+    df = pd.DataFrame(
+        {
+            "parent_cif_id": ["g1", "g1", "g2"],
+            "formula_standardized": ["A", "A", "B"],
+            "family": ["other", "other", "other"],
+            "Tc_K": [1.0, 3.0, 5.0],
+            "pressure_GPa": pd.to_numeric(["0", "10", "2"], errors="coerce"),
+        }
+    )
+
+    reuse = _cif_reuse(df)
+
+    row = reuse.loc[reuse["parent_cif_id"] == "g1"].iloc[0]
+    assert row["tc_span"] == 2.0
+    assert row["p_span"] == 10.0

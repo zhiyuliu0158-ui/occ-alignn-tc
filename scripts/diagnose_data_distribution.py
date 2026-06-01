@@ -101,6 +101,9 @@ def main() -> None:
 
     out_dir = ensure_dir(args.out_dir)
     frame = pd.read_csv(args.data_csv)
+    for numeric_name in ("Tc_K", "pressure_GPa", "magnetic_field_T"):
+        if numeric_name in frame.columns:
+            frame[numeric_name] = pd.to_numeric(frame[numeric_name], errors="coerce")
     frame = add_regime_columns(frame)
     frame.to_csv(out_dir / "data_with_regimes.csv", index=False)
 
