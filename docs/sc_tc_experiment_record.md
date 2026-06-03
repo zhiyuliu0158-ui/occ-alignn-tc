@@ -1,6 +1,6 @@
-# SC-Tc Experiment Record
+﻿# SC-Tc Experiment Record
 
-Last updated: 2026-05-29
+Last updated: 2026-06-03
 
 This document records the current development and experiment state for the
 `occ-alignn-tc` project. It intentionally excludes server passwords and private
@@ -490,6 +490,190 @@ regime:
 - cuprates and high-pressure/high-Tc cases remain the most difficult subsets;
 - real CIFs alone do not solve the high-Tc extrapolation problem.
 
+## Final-clean Exact-CIF Experiment
+
+This experiment used the cleaned real-CIF archive received on 2026-06-02:
+
+```text
+C:\Users\Administrator\Desktop\final_clean.rar
+```
+
+Only the `01_exact_cif_only/3dsc_formula_group_train_test_split` subset was
+used for this run. The `02_exact_plus_3dsc` subset was not mixed into the
+exact-only benchmark.
+
+### Data Update
+
+Local data path:
+
+```text
+D:\SC-Tc\exact_first_all_current
+```
+
+Remote data path:
+
+```text
+/data/home/intern002/ziyang/sc-tc/data/exact_first_all_current
+```
+
+The previous local and remote data directories were backed up before
+replacement:
+
+```text
+D:\SC-Tc\exact_first_all_current_backup_20260602_141401
+/data/home/intern002/ziyang/sc-tc/data/exact_first_all_current_backup_20260602_141531
+```
+
+The archive CSV columns were adapted to the training schema:
+
+| Source column | Training column |
+|---|---|
+| `primary_cif_relpath` | `cif_path` |
+| `tc_k_standardized` | `Tc_K` |
+| `pressure_gpa_standardized` | `pressure_GPa` |
+| `magnetic_field_t_standardized` | `magnetic_field_T` |
+
+The cleaned package only provided train/test splits. A validation split was
+generated from the provided train split using `formula_reduced` groups and
+random seed 42. The provided test split was left unchanged.
+
+Validation after local and remote sync:
+
+| Item | Count |
+|---|---:|
+| total rows | 5877 |
+| rows with valid `Tc_K` | 5877 |
+| train rows | 4294 |
+| val rows | 664 |
+| test rows | 919 |
+| unique referenced CIF paths | 522 |
+| copied CIF files | 1753 |
+| missing referenced CIF paths | 0 |
+
+The server upload initially produced Windows-style backslash paths after ZIP
+extraction. These were normalized on the server before training, and the final
+remote missing-CIF count was 0.
+
+### Training Run
+
+- Config: `configs/occ_alignn_comp_formula_huber_tc.yaml`
+- Slurm job: `136307`
+- Partition: `gpu4090_128`
+- Node: `gpu40903`
+- Runtime: `01:44:52`
+- Best epoch: 2
+- Output root:
+  `/data/home/intern002/ziyang/sc-tc/runs/exact_first_a_final_clean_4090_lr3e4`
+
+### Overall Metrics
+
+| Version | Test n | Best epoch | Val MAE K | Val RMSE K | Val R2 | Val MSLE | Test MAE K | Test RMSE K | Test R2 | Test MSLE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Old exact-first A | 3718 | 13 | 15.079 | 31.352 | -0.087 | 1.109 | 24.435 | 52.052 | 0.100 | 1.293 |
+| Final-clean exact A | 919 | 2 | 10.020 | 17.216 | 0.499 | 0.560 | 20.965 | 38.522 | -0.528 | 0.897 |
+
+The final-clean run has lower MAE, RMSE, and MSLE than the old exact-first run,
+but the test split is different and smaller. The negative test R2 means it
+should not be interpreted as a clean solution to the modeling problem.
+
+### Final-clean Test Subset Metrics
+
+| Subset | n | MAE K | RMSE K | R2 | MSLE |
+|---|---:|---:|---:|---:|---:|
+| all | 919 | 20.965 | 38.522 | -0.528 | 0.897 |
+| exclude H3S | 919 | 20.965 | 38.522 | -0.528 | 0.897 |
+| exclude PH3/SbH4 | 919 | 20.965 | 38.522 | -0.528 | 0.897 |
+| exclude hydride high pressure | 919 | 20.965 | 38.522 | -0.528 | 0.897 |
+| exclude Tc > 120 K | 919 | 20.965 | 38.522 | -0.528 | 0.897 |
+| P > 50 GPa | 2 | 69.720 | 96.495 | -4.406 | 0.531 |
+
+The final-clean test split has no H3S, PH3/SbH4, hydride-high-pressure, MgB2,
+or `Tc > 120 K` samples under the current evaluator masks. Its main failure is
+therefore not the same hydride tail seen in the older exact-first run.
+
+### Final-clean Tc-bin Metrics
+
+| Tc bin | n | MAE K | RMSE K |
+|---|---:|---:|---:|
+| <=1 | 43 | 3.066 | 6.447 |
+| 1-5 | 282 | 3.879 | 6.294 |
+| 5-10 | 123 | 6.172 | 9.506 |
+| 10-20 | 103 | 8.670 | 22.469 |
+| 20-40 | 157 | 14.547 | 25.008 |
+| 40-80 | 82 | 63.733 | 76.201 |
+| 80-120 | 129 | 68.827 | 74.363 |
+
+The low-Tc region is much better than the high-Tc region. The model still fails
+strongly in `40-80 K` and `80-120 K`.
+
+### Final-clean Pressure-bin Metrics
+
+| Pressure bin | n | MAE K | Max error K |
+|---|---:|---:|---:|
+| 0 | 748 | 23.303 | 156.244 |
+| 0-1 | 43 | 15.346 | 85.344 |
+| 1-10 | 103 | 6.834 | 76.259 |
+| 10-50 | 23 | 14.479 | 122.507 |
+| 50-100 | 2 | 69.720 | 136.432 |
+
+The largest total error is not only a high-pressure issue. Ambient-pressure
+cuprate samples also dominate the worst-error table.
+
+### Final-clean Worst-error Pattern
+
+Worst-error concentration:
+
+| Top-k worst samples | Share of total absolute error |
+|---:|---:|
+| 10 | 0.070 |
+| 25 | 0.152 |
+| 50 | 0.272 |
+| 100 | 0.498 |
+
+Largest chemical-system error groups:
+
+| Chemical system | n | MAE K | Max error K |
+|---|---:|---:|---:|
+| `Sr2CaCu2(BiO4)2` | 128 | 91.860 | 156.244 |
+| `Ag` | 30 | 56.516 | 117.478 |
+| `MgO` | 8 | 41.328 | 82.401 |
+| `Au` | 11 | 40.498 | 94.967 |
+| `FeReAsO` | 3 | 35.734 | 39.468 |
+
+The worst errors are dominated by `Sr2CaCu2(BiO4)2` records. Many of these share
+the same reduced formula and CIF but have different `doping_record_original`,
+`tc_raw`, pressure, or field values. The current A input does not fully encode
+the experimental doping context, so different Tc values can collapse to very
+similar model inputs.
+
+Representative worst samples:
+
+| Sample | Chemical system | True Tc K | Pred Tc K | Abs error K | Pressure GPa | Field T | Doping/context |
+|---|---|---:|---:|---:|---:|---:|---|
+| `record_004639` | `Sr2CaCu2(BiO4)2` | 13.700 | 169.944 | 156.244 | 0.0 | 0.0 | `p=0.06` |
+| `record_004640` | `Sr2CaCu2(BiO4)2` | 20.000 | 169.944 | 149.944 | 0.0 | 0.0 | multiple low-p entries |
+| `record_000247` | `Sr2CaCu2(BiO4)2` | 20.250 | 166.809 | 146.559 | 0.0 | 3.0 | `x=0` |
+| `record_002222` | `Sr2CaCu2(BiO4)2` | 90.000 | 226.432 | 136.432 | 56.0 | 0.0 | high pressure |
+| `record_004281` | `Ag` | 120.000 | 2.522 | 117.478 | 0.0 | 0.0 | raw `120 K` |
+
+### Interpretation
+
+The final-clean exact-CIF run suggests that data cleaning helps some aggregate
+metrics, but it does not solve the main problem. The remaining dominant issues
+are:
+
+- high-Tc cuprates still have large errors;
+- the current formula/CIF inputs do not sufficiently distinguish doping level,
+  sample preparation, and measurement context;
+- a single CIF can correspond to many experimental Tc values, and those values
+  can span a large range;
+- final-clean real CIFs remove one source of noise, but the model still needs
+  better high-Tc/cuprate/doping-aware evaluation and representation.
+
+Current conclusion: CIF cleaning is helpful but not sufficient. The next model
+or data direction should focus on high-Tc cuprate regimes and doping/context
+features before claiming that CIF quality was the main bottleneck.
+
 ## Implemented Distribution-First Tooling
 
 The following tooling was added to support the next optimization stage without
@@ -587,6 +771,11 @@ Both are opt-in. Original A remains unchanged.
    reported because they are harder and involve approximate structures.
 6. MgB2 all in test is not inherently wrong if the goal is out-of-family
    extrapolation, but that must be stated explicitly.
+7. Cleaned exact CIFs improve some aggregate metrics but do not remove the
+   high-Tc cuprate failure mode.
+8. Doping/sample context is likely a first-order missing signal for cuprates:
+   multiple records can share a reduced formula and CIF while having very
+   different Tc values.
 
 ## Recommended Next Steps
 
@@ -608,4 +797,14 @@ Both are opt-in. Original A remains unchanged.
    approximate-CIF/true-CIF data is available.
 6. For future optimization, focus on data splits and regime-aware reporting
    before making large architecture changes.
+7. Add a cuprate/doping-focused diagnostic:
+   - group by reduced formula plus CIF;
+   - measure Tc span inside each group;
+   - identify groups where the input is nearly identical but Tc varies widely.
+8. For high-Tc cuprates, test lightweight context features before larger
+   architecture changes:
+   - parsed doping level from `doping_record_original`;
+   - raw formula expansion and composition deltas;
+   - measurement criterion and field/pressure context;
+   - synthesis/substrate metadata only as a controlled ablation.
 
