@@ -1,6 +1,6 @@
 ﻿# SC-Tc Experiment Record
 
-Last updated: 2026-06-03
+Last updated: 2026-06-05
 
 This document records the current development and experiment state for the
 `occ-alignn-tc` project. It intentionally excludes server passwords and private
@@ -674,6 +674,195 @@ Current conclusion: CIF cleaning is helpful but not sufficient. The next model
 or data direction should focus on high-Tc cuprate regimes and doping/context
 features before claiming that CIF quality was the main bottleneck.
 
+## Final-cleanned Exact-CIF Experiment
+
+This experiment used the second cleaned real-CIF archive received on
+2026-06-04:
+
+```text
+C:\Users\Administrator\Desktop\final_cleanned.rar
+```
+
+Only the `final_cleanned/exact_cif_only` subset was used. This run is the
+current best exact-CIF neural-network result.
+
+### Data Update
+
+Local data path:
+
+```text
+D:\SC-Tc\exact_first_all_current
+```
+
+Remote data path:
+
+```text
+/data/home/intern002/ziyang/sc-tc/data/exact_first_all_current
+```
+
+The previous local data directory was backed up before replacement:
+
+```text
+D:\SC-Tc\exact_first_all_current_backup_20260604_203727
+```
+
+The second cleaned package already contained the core training columns
+`Tc_K`, `pressure_GPa`, `magnetic_field_T`, `formula_standardized`,
+`formula_reduced`, `cif_match_type`, and `primary_cif_relpath`. The training
+adapter still normalized the schema so that `primary_cif_relpath` became
+`cif_path`, and it added compatibility columns expected by the existing
+evaluator.
+
+The package provided train/test splits. A validation split was generated from
+the provided train split using `formula_reduced` groups and random seed 42. The
+provided test split was left unchanged.
+
+Validation after local and remote sync:
+
+| Item | Count |
+|---|---:|
+| total rows | 5428 |
+| rows with valid `Tc_K` | 5428 |
+| train rows | 3894 |
+| val rows | 501 |
+| test rows | 1033 |
+| unique referenced CIF paths | 988 |
+| copied CIF files | 988 |
+| missing referenced CIF paths | 0 |
+
+### Training Run
+
+- Config: `configs/occ_alignn_comp_formula_huber_tc.yaml`
+- Slurm job: `138115`
+- Partition: `gpu4090_128`
+- Node: `gpu40903`
+- Output root:
+  `/data/home/intern002/ziyang/sc-tc/runs/exact_first_a_final_cleanned_4090_lr3e4`
+
+### Overall Metrics
+
+| Version | Test n | Best epoch | Val MAE K | Val RMSE K | Val R2 | Val MSLE | Test MAE K | Test RMSE K | Test R2 | Test MSLE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Old exact-first A | 3718 | 13 | 15.079 | 31.352 | -0.087 | 1.109 | 24.435 | 52.052 | 0.100 | 1.293 |
+| Final-clean exact A | 919 | 2 | 10.020 | 17.216 | 0.499 | 0.560 | 20.965 | 38.522 | -0.528 | 0.897 |
+| Final-cleanned exact A | 1033 | 3 | 14.272 | 22.891 | 0.239 | 0.346 | 9.172 | 13.782 | 0.288 | 0.678 |
+
+The second cleaned dataset produced a large improvement over the previous
+exact-CIF runs. It also brings the neural model much closer to the traditional
+ML baselines, although the test R2 still lags behind.
+
+### Comparison With Traditional ML Reference
+
+| Method / Split | MAE K | R2 | MSLE |
+|---|---:|---:|---:|
+| 3DSC train -> 3DSC test | 5.499 | 0.485 | 0.773 |
+| 3DSC train -> our test | 9.588 | 0.522 | 0.850 |
+| our train -> our test | 8.702 | 0.500 | 0.575 |
+| our train -> 3DSC test | 6.659 | 0.456 | 1.694 |
+| Final-cleanned exact A | 9.172 | 0.288 | 0.678 |
+
+Interpretation:
+
+- MAE is now close to the `3DSC train -> our test` and `our train -> our test`
+  traditional ML results.
+- MSLE is better than `3DSC train -> our test` but still worse than
+  `our train -> our test`.
+- R2 remains clearly worse than the traditional ML references, indicating that
+  the neural model still does not capture the full trend across regimes.
+
+### Final-cleanned Test Subset Metrics
+
+| Subset | n | MAE K | RMSE K | R2 | MSLE |
+|---|---:|---:|---:|---:|---:|
+| all | 1033 | 9.172 | 13.782 | 0.288 | 0.678 |
+| exclude H3S | 1033 | 9.172 | 13.782 | 0.288 | 0.678 |
+| exclude PH3/SbH4 | 1033 | 9.172 | 13.782 | 0.288 | 0.678 |
+| exclude hydride high pressure | 1020 | 8.759 | 12.993 | 0.298 | 0.674 |
+| exclude Tc > 120 K | 1031 | 9.182 | 13.794 | 0.209 | 0.679 |
+| P > 50 GPa | 34 | 21.737 | 29.765 | -0.379 | 0.754 |
+| P > 100 GPa | 16 | 33.474 | 38.139 | -1.639 | 0.789 |
+| hydride high pressure | 13 | 41.574 | 42.977 | -36.891 | 0.969 |
+| exact fidelity | 1033 | 9.172 | 13.782 | 0.288 | 0.678 |
+
+### Final-cleanned Tc-bin Metrics
+
+| Tc bin | n | MAE K | RMSE K |
+|---|---:|---:|---:|
+| <=1 | 93 | 2.825 | 4.560 |
+| 1-5 | 348 | 4.292 | 7.724 |
+| 5-10 | 170 | 6.174 | 9.160 |
+| 10-20 | 150 | 10.814 | 14.576 |
+| 20-40 | 230 | 15.751 | 17.509 |
+| 40-80 | 27 | 34.754 | 37.796 |
+| 80-120 | 13 | 36.761 | 37.473 |
+| >120 | 2 | 3.935 | 4.414 |
+
+The low-Tc region is now substantially better, but the `40-80 K` and `80-120 K`
+bins remain difficult.
+
+### Final-cleanned Pressure-bin Metrics
+
+| Pressure bin | n | MAE K | Max error K |
+|---|---:|---:|---:|
+| 0 | 786 | 9.054 | 46.617 |
+| 0-1 | 45 | 7.769 | 28.189 |
+| 1-10 | 116 | 7.351 | 48.680 |
+| 10-50 | 52 | 8.026 | 47.379 |
+| 50-100 | 18 | 11.304 | 63.000 |
+| >100 | 16 | 33.474 | 75.288 |
+
+The high-pressure tail is still a distinct weak regime, especially above
+100 GPa.
+
+### Final-cleanned Worst-error Pattern
+
+Worst-error concentration:
+
+| Top-k worst samples | Share of total absolute error |
+|---:|---:|
+| 10 | 0.054 |
+| 25 | 0.118 |
+| 50 | 0.210 |
+| 100 | 0.353 |
+
+Largest chemical-system error groups:
+
+| Chemical system | n | MAE K | Max error K |
+|---|---:|---:|---:|
+| `SnH4` | 1 | 75.288 | 75.288 |
+| `Nd1Fe1As1O0.8F0.2` | 6 | 39.545 | 41.967 |
+| `Ba2Y1Cu3O6.8` | 14 | 39.139 | 48.680 |
+| `K0.1Ba0.9Fe2As2` | 1 | 38.878 | 38.878 |
+| `BiH2` | 13 | 36.370 | 47.801 |
+| `Ba1Fe1.9As2Pt0.1` | 4 | 36.201 | 36.704 |
+| `La4Ni3O10` | 12 | 34.777 | 63.000 |
+
+Representative worst samples:
+
+| Sample | Chemical system | True Tc K | Pred Tc K | Abs error K | Pressure GPa | Field T |
+|---|---|---:|---:|---:|---:|---:|
+| `record_008153` | `SnH4` | 72.000 | 147.288 | 75.288 | 180.0 | 0.0 |
+| `record_006319` | `La4Ni3O10` | 4.000 | 67.000 | 63.000 | 72.0 | 0.0 |
+| `record_003511` | `Ba2Y1Cu3O6.8` | 82.300 | 130.980 | 48.680 | 1.1 | 0.5 |
+| `record_002474` | `BiH2` | 70.000 | 22.199 | 47.801 | 159.0 | 0.0 |
+| `record_006318` | `La4Ni3O10` | 3.000 | 50.379 | 47.379 | 25.3 | 0.0 |
+
+### Interpretation
+
+The latest cleaned dataset changes the main conclusion:
+
+- data cleaning and dataset quality were a major source of the previously poor
+  exact-CIF results;
+- after cleaning, the neural model is close to traditional ML on MAE and MSLE;
+- however, R2 still lags, so the neural model has not learned the global trend
+  as well as `MAGPIE + DSOAP + XGB`;
+- high-pressure hydrides and high-Tc cuprate/oxide-like materials remain the
+  main weak subsets.
+
+Current conclusion: the poor earlier exact-CIF runs were partly caused by data
+quality and split construction. The remaining bottleneck is now more specific:
+high-pressure/high-Tc regimes and condition-sensitive extrapolation.
+
 ## Implemented Distribution-First Tooling
 
 The following tooling was added to support the next optimization stage without
@@ -776,6 +965,12 @@ Both are opt-in. Original A remains unchanged.
 8. Doping/sample context is likely a first-order missing signal for cuprates:
    multiple records can share a reduced formula and CIF while having very
    different Tc values.
+9. The second cleaned exact-CIF dataset substantially improves the neural
+   baseline, so data quality was a major factor in the poor earlier exact-CIF
+   runs.
+10. After the second cleaning, the remaining gap is more concentrated in
+    high-pressure hydrides, high-Tc cuprate/oxide-like samples, and global trend
+    fitting as reflected by R2.
 
 ## Recommended Next Steps
 
@@ -807,4 +1002,8 @@ Both are opt-in. Original A remains unchanged.
    - raw formula expansion and composition deltas;
    - measurement criterion and field/pressure context;
    - synthesis/substrate metadata only as a controlled ablation.
-
+9. Treat `final_cleanned` as the current exact-CIF benchmark and compare future
+   neural experiments against it, not against the older uncleaned exact-first
+   result.
+10. Continue reporting traditional ML references in the same table because the
+    latest neural MAE is close to those baselines while R2 remains lower.
