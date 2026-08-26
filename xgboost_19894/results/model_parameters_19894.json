@@ -1,0 +1,51 @@
+{
+  "model": "XGBRegressor",
+  "xgboost_version": "3.2.0",
+  "scikit_learn_version": "1.7.2",
+  "chemml_version": "1.3",
+  "pymatgen_version": "2025.10.7",
+  "preprocessing": "StandardScaler fitted independently on each training fold",
+  "target_transform": "asinh(max(Tc,0)/2)/(10*asinh(1/2))",
+  "inverse_prediction_bounds_k": [0.0, 400.0],
+  "training_sample_weight": "1 / count(canonical_formula)",
+  "xgboost_resolved_parameters": {
+    "booster": "gbtree",
+    "objective": "reg:squarederror",
+    "n_estimators": 100,
+    "max_depth": 6,
+    "learning_rate": 0.3,
+    "min_child_weight": 1.0,
+    "subsample": 1.0,
+    "colsample_bytree": 1.0,
+    "colsample_bylevel": 1.0,
+    "colsample_bynode": 1.0,
+    "gamma": 0.0,
+    "reg_alpha": 0.0,
+    "reg_lambda": 1.0,
+    "max_bin": 256,
+    "grow_policy": "depthwise",
+    "tree_method": "auto",
+    "cpu_updater": "grow_quantile_histmaker",
+    "early_stopping": false,
+    "n_jobs": 4,
+    "random_state": "58 + repetition"
+  },
+  "validation": {
+    "splitter": "GroupShuffleSplit",
+    "group": "canonical chemical system",
+    "repetitions": 10,
+    "train_group_fraction": 0.8,
+    "split_random_state": 58,
+    "chemical_system_overlap_each_fold": 0
+  },
+  "features": {
+    "total": 177,
+    "magpie_composition": 131,
+    "pressure_field_and_missingness": 5,
+    "tc_measurement_method": 4,
+    "physical_substrate": 37,
+    "cif_or_structure": 0,
+    "edos": 0,
+    "phdos": 0
+  }
+}

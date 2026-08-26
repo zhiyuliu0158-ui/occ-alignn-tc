@@ -1,0 +1,152 @@
+{
+  "dataset_rows": 19894,
+  "source_core_rows_before_hydride_filter": 20119,
+  "removed_high_pressure_hydride_rows": 225,
+  "unique_formula_strings": 5180,
+  "model_canonicalized_formulas": 5049,
+  "chemical_systems": 1719,
+  "tc_k": {
+    "count": 19894,
+    "missing": 0,
+    "min": 0.00037,
+    "q25": 3.9,
+    "median": 10.0,
+    "mean": 19.394050992661107,
+    "q75": 29.5,
+    "max": 139.0
+  },
+  "pressure_gpa": {
+    "count": 19886,
+    "missing": 8,
+    "min": 0.0,
+    "q25": 0.0,
+    "median": 0.0,
+    "mean": 1.606755275882551,
+    "q75": 0.0,
+    "max": 283.0
+  },
+  "magnetic_field_t": {
+    "count": 19870,
+    "missing": 24,
+    "min": 0.0,
+    "q25": 0.0,
+    "median": 0.0,
+    "mean": 0.1230501315148465,
+    "q75": 0.0,
+    "max": 40.0
+  },
+  "positive_pressure_rows": 1751,
+  "zero_pressure_rows": 18135,
+  "nonzero_field_rows": 2207,
+  "zero_field_rows": 17663,
+  "tc_ge_40_rows": 2320,
+  "tc_ge_77_rows": 937,
+  "tc_ge_100_rows": 228,
+  "criterion_counts": {
+    "unknown": 8755,
+    "onset": 6438,
+    "zero": 2478,
+    "midpoint": 2223
+  },
+  "sample_form_counts": {
+    "unknown": 10463,
+    "polycrystal": 4328,
+    "single_crystal": 2523,
+    "thin_film": 2453,
+    "bulk": 98,
+    "monolayer": 12,
+    "interface": 7,
+    "nanostructure": 5,
+    "powder": 5
+  },
+  "known_substrate_rows": 3777,
+  "substrate_formula_parseable_rows": 3486,
+  "substrate_formula_unparseable_known_rows": 291,
+  "feature_counts": {
+    "total": 177,
+    "composition_magpie": 131,
+    "condition_total": 46,
+    "physical_substrate": 37,
+    "measurement_method": 4,
+    "pressure_field": 5
+  },
+  "validation": {
+    "repetitions": 10,
+    "train_fraction_by_groups": 0.8,
+    "random_seed": 58,
+    "grouping": "chemical system",
+    "overlap_all_folds": 0,
+    "train_rows_mean": 16115.3,
+    "train_rows_min": 14199,
+    "train_rows_max": 17001,
+    "test_rows_mean": 3778.7,
+    "test_rows_min": 2893,
+    "test_rows_max": 5695,
+    "train_systems_each": 1375,
+    "test_systems_each": 344
+  },
+  "primary_test_metrics": {
+    "MAE_unweighted": {
+      "mean": 5.739475275474781,
+      "std": 1.5244003226389276,
+      "min": 4.577202671550846,
+      "max": 9.355995208205986
+    },
+    "RMSE_unweighted": {
+      "mean": 10.248162856560944,
+      "std": 2.6388287196168285,
+      "min": 7.436614385930815,
+      "max": 16.052347473399625
+    },
+    "r2_unweighted": {
+      "mean": 0.7849243875191612,
+      "std": 0.04215860103163431,
+      "min": 0.6931580286523878,
+      "max": 0.8496731007959029
+    },
+    "MSLE_unweighted": {
+      "mean": 0.2587846367987518,
+      "std": 0.04233690318862217,
+      "min": 0.1900811203210049,
+      "max": 0.3152865548224783
+    },
+    "r2_log1p_unweighted": {
+      "mean": 0.7837621449648738,
+      "std": 0.024316871763724088,
+      "min": 0.7392985442516371,
+      "max": 0.8193698237010553
+    }
+  },
+  "weighted_test_metrics": {
+    "MAE": {
+      "mean": 6.258477148209874,
+      "std": 1.2017595376830206,
+      "min": 4.990256560105775,
+      "max": 8.894200765639482
+    },
+    "RMSE": {
+      "mean": 11.513627391602464,
+      "std": 2.4251619155264548,
+      "min": 8.943277746127617,
+      "max": 16.860213289709883
+    },
+    "r2": {
+      "mean": 0.7784502394984429,
+      "std": 0.046934245061365114,
+      "min": 0.7044778588067941,
+      "max": 0.8511872262925292
+    },
+    "MSLE": {
+      "mean": 0.2721117810091942,
+      "std": 0.046290587446414705,
+      "min": 0.1977013093436307,
+      "max": 0.3344364355171388
+    },
+    "median_AE": {
+      "mean": 2.794756796380232,
+      "std": 0.7181882456045674,
+      "min": 2.0272344530517272,
+      "max": 4.264552205877781
+    }
+  }
+}
