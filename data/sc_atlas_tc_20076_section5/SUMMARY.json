@@ -1,0 +1,27 @@
+{
+  "input_rows": 20076,
+  "output_rows": 20076,
+  "rows_added": 0,
+  "rows_removed": 0,
+  "source_article_rows": 11200,
+  "source_nonempty_counts": {
+    "competing_orders": 2308,
+    "gap_symmetry": 2967,
+    "pairing_mechanism": 2382,
+    "dopant_defect": 5002
+  },
+  "output_nonempty_counts": {
+    "competing_orders": 4081,
+    "gap_symmetry": 4122,
+    "pairing_mechanism": 3895,
+    "dopant_defect": 8714
+  },
+  "rows_with_any_new_feature": 12619,
+  "match_method_counts": {
+    "doi_exact": 14251,
+    "unmatched": 3651,
+    "title_exact_fallback": 2174
+  },
+  "source_file": "D:\\超导数据库-单物\\超导数据库基础信息知识图谱\\outputs\\section5_summary\\all_11200_article_features.xlsx",
+  "input_file": "D:\\sc-bench\\OUR_SC_ATLAS_DATA_FINAL_20260810\\supercon_tc_benchmark_core_formula_layer_clean.csv"
+}
